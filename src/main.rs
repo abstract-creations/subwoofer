@@ -11,24 +11,41 @@ use cpal::{
 };
 use futures::executor;
 use lowpass_filter::lowpass_filter;
+use std::cell::RefCell;
 use std::io::{stdin, BufRead};
 use std::sync::{Arc, OnceLock};
+use std::time::{Duration, Instant};
 
 static mut TEST_CLIENT_DEVICE: OnceLock<Arc<ButtplugClientDevice>> = OnceLock::new();
+static mut LAST_TIME: RefCell<Option<Instant>> = RefCell::new(None);
 
 fn callback_fn(x: &[f32], sampling_rate: f32) -> Vec<f32> {
     let mut data_f32 = x.iter().copied().collect::<Vec<_>>();
     lowpass_filter(&mut data_f32, sampling_rate, 80.0);
 
     unsafe {
+        let last_run = LAST_TIME.borrow().unwrap();
+        let potential_past_instant = last_run + Duration::from_millis(100);
+        let current_instant = Instant::now();
+        if potential_past_instant > current_instant {
+            // Return unmodified lowpass filter data
+            return data_f32;
+        }
+
+        let mut first_waveform = *data_f32.last().unwrap() as f64;
+        first_waveform = f64::abs(first_waveform);
+        first_waveform *= 10.0;
+
+        let computed_intensity = f64::min(
+            first_waveform,
+            1.0,
+        );
         let buttplug_continuation =
             TEST_CLIENT_DEVICE
                 .get()
                 .unwrap()
-                .vibrate(&ScalarValueCommand::ScalarValue(f64::min(
-                    *data_f32.first().unwrap() as f64 * 2.0,
-                    1.0,
-                )));
+                .vibrate(&ScalarValueCommand::ScalarValue(computed_intensity));
+        LAST_TIME.replace(Some(Instant::now()));
 
         let _ = executor::block_on(buttplug_continuation);
     }
@@ -50,10 +67,13 @@ async fn main() -> anyhow::Result<()> {
         TEST_CLIENT_DEVICE
             .set(Arc::clone(&client.devices()[0]))
             .unwrap();
+        LAST_TIME.replace(Some(Instant::now()));
     }
 
     let default_out_dev = select_output_dev();
     let default_out_config = default_out_dev.default_output_config().unwrap().config();
+    let default_dev_name = default_out_dev.name()?;
+    println!("Using default output device: {}", default_dev_name);
 
     open_window_connect_audio(
         "Live Audio Lowpass Filter View",
