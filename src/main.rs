@@ -25,7 +25,7 @@ fn callback_fn(x: &[f32], sampling_rate: f32) -> Vec<f32> {
 
     unsafe {
         let last_run = LAST_TIME.borrow().unwrap();
-        let potential_past_instant = last_run + Duration::from_millis(100);
+        let potential_past_instant = last_run + Duration::from_millis(35);
         let current_instant = Instant::now();
         if potential_past_instant > current_instant {
             // Return unmodified lowpass filter data
