@@ -20,7 +20,7 @@ static mut TEST_CLIENT_DEVICE: OnceLock<Arc<ButtplugClientDevice>> = OnceLock::n
 static mut LAST_TIME: RefCell<Option<Instant>> = RefCell::new(None);
 
 fn callback_fn(x: &[f32], sampling_rate: f32) -> Vec<f32> {
-    let mut data_f32 = x.iter().copied().collect::<Vec<_>>();
+    let mut data_f32 = x.to_vec();
     lowpass_filter(&mut data_f32, sampling_rate, 80.0);
 
     unsafe {
@@ -36,15 +36,12 @@ fn callback_fn(x: &[f32], sampling_rate: f32) -> Vec<f32> {
         first_waveform = f64::abs(first_waveform);
         first_waveform *= 10.0;
 
-        let computed_intensity = f64::min(
-            first_waveform,
-            1.0,
-        );
-        let buttplug_continuation =
-            TEST_CLIENT_DEVICE
-                .get()
-                .unwrap()
-                .vibrate(&ScalarValueCommand::ScalarValue(computed_intensity));
+        let computed_intensity = f64::min(first_waveform, 1.0);
+        //println!("Writing {}", computed_intensity);
+        let buttplug_continuation = TEST_CLIENT_DEVICE
+            .get()
+            .unwrap()
+            .vibrate(&ScalarValueCommand::ScalarValue(computed_intensity));
         LAST_TIME.replace(Some(Instant::now()));
 
         let _ = executor::block_on(buttplug_continuation);
@@ -112,13 +109,14 @@ pub fn list_output_devs() -> Vec<(String, cpal::Device)> {
 }
 
 /// Helps to select the default output device.
+// TODO(spotlightishere): Please graft this to something GUI in the future!
 fn select_output_dev() -> cpal::Device {
     let mut devs = list_output_devs();
     assert!(!devs.is_empty(), "no output devices found!");
     if devs.len() == 1 {
         return devs.remove(0).1;
     }
-    println!();
+    println!("Type the number of the output device audio is playing to, and press enter.");
     devs.iter().enumerate().for_each(|(i, (name, dev))| {
         println!(
             "  [{}] {} {:?}",
@@ -129,6 +127,6 @@ fn select_output_dev() -> cpal::Device {
     });
     let mut input = String::new();
     stdin().lock().read_line(&mut input).unwrap();
-    let index = (&input[0..1]).parse::<usize>().unwrap();
+    let index = input[0..1].parse::<usize>().unwrap();
     devs.remove(index).1
 }
