@@ -121,9 +121,9 @@ async fn main() -> anyhow::Result<()> {
         let computed_intensity = f64::min(mean_value, 1.0);
 
         // Play!
-        println!("Playing {}", computed_intensity);
+        // println!("Playing {}", computed_intensity);
         let _ = client_device
-            .vibrate(&ScalarValueCommand::ScalarValue(mean_value))
+            .vibrate(&ScalarValueCommand::ScalarValue(computed_intensity))
             .await;
 
         interval.tick().await;
