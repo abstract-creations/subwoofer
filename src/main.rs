@@ -17,6 +17,7 @@ use std::sync::{Arc, Mutex, OnceLock}; // Import OnceLock
 use std::time::Duration;
 use tokio::{sync::mpsc, time};
 
+/// For now, a maximum of 16 persisted samples at any given run is good enough to average.
 const SAMPLE_LIMIT: usize = 16;
 
 // --- FIX: Create a struct to hold all the state needed by the audio callback ---
@@ -155,19 +156,26 @@ fn audio_transform_fn(direct_values: &[f32], sampling_rate: f32) -> Vec<f32> {
 async fn run_vibration_logic(settings: Arc<Mutex<AppSettings>>) -> Result<()> {
     let connector = new_json_ws_client_connector("ws://localhost:12345/buttplug");
     let client = ButtplugClient::new("subwoofer");
-
+    // TODO(spotlightishere): Properly handle errors if scanning fails
     println!("Connecting to Buttplug server...");
     client.connect(connector).await?;
     client.start_scanning().await?;
     tokio::time::sleep(Duration::from_secs(1)).await;
     client.stop_scanning().await?;
 
+    // TODO(spotlightishere): We currently assume that only one device is attached.
+    //
+    // This should be refactored in the future to support multiple,
+    // similar to how we support multiple audio devices.
     let all_devices = client.devices();
     let Some(client_device) = all_devices.first() else {
         panic!("No Buttplug device found! Please ensure a device is connected.");
     };
     println!("Device connected: {}", client_device.name());
 
+    // We'll utilize Tokio channels to communicate between our audio analysis and vibration threads.
+    //
+    // TODO(spotlightishere): A stream might be preferable, perhaps with some sort of debounce/throttle.
     let (tx, mut rx) = mpsc::channel::<f64>(SAMPLE_LIMIT);
 
     // --- FIX: Initialize the global state before starting the audio thread ---
