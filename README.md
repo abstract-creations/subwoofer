@@ -15,6 +15,6 @@ if you don't have rust installed you will get this error:
 Go to the official Rust website: https://www.rust-lang.org/tools/install
 Follow the on-screen instructions. It will usually ask you to proceed with the default installation, which is generally fine. This process will install Rust, Cargo, and set up the necessary environment variables.
 
-Close and Reopen your Terminal/PowerShell: This is often the simplest fix. After installing Rust, the changes to the PATH variable might only take effect in new terminal sessions.
+Close and Reopen your Terminal/PowerShell: After installing Rust, the changes to the PATH variable might only take effect in new terminal sessions.
 
 Then try running cargo run again in your project directory.
