@@ -18,3 +18,5 @@ Follow the on-screen instructions. It will usually ask you to proceed with the d
 Close and Reopen your Terminal/PowerShell: After installing Rust, the changes to the PATH variable might only take effect in new terminal sessions.
 
 Then try running ```cargo run``` again in your project directory.
+
+It will ask you to select an audio device in the console by typing a number.
