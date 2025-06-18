@@ -154,31 +154,8 @@ fn audio_transform_fn(direct_values: &[f32], sampling_rate: f32) -> Vec<f32> {
 }
 
 async fn run_vibration_logic(settings: Arc<Mutex<AppSettings>>) -> Result<()> {
-    let connector = new_json_ws_client_connector("ws://localhost:12345/buttplug");
-    let client = ButtplugClient::new("subwoofer");
-    // TODO(spotlightishere): Properly handle errors if scanning fails
-    println!("Connecting to Buttplug server...");
-    client.connect(connector).await?;
-    client.start_scanning().await?;
-    tokio::time::sleep(Duration::from_secs(1)).await;
-    client.stop_scanning().await?;
-
-    // TODO(spotlightishere): We currently assume that only one device is attached.
-    //
-    // This should be refactored in the future to support multiple,
-    // similar to how we support multiple audio devices.
-    let all_devices = client.devices();
-    let Some(client_device) = all_devices.first() else {
-        panic!("No Buttplug device found! Please ensure a device is connected.");
-    };
-    println!("Device connected: {}", client_device.name());
-
-    // We'll utilize Tokio channels to communicate between our audio analysis and vibration threads.
-    //
-    // TODO(spotlightishere): A stream might be preferable, perhaps with some sort of debounce/throttle.
     let (tx, mut rx) = mpsc::channel::<f64>(SAMPLE_LIMIT);
 
-    // --- FIX: Initialize the global state before starting the audio thread ---
     let initial_state = AudioProcessorState {
         tx,
         settings: Arc::clone(&settings),
@@ -189,8 +166,7 @@ async fn run_vibration_logic(settings: Arc<Mutex<AppSettings>>) -> Result<()> {
 
     let default_out_dev = select_output_dev();
     let default_out_config = default_out_dev.default_output_config().unwrap().config();
-    println!("Using audio device: {}", default_out_dev.name()?);
-
+    println!("[Audio] Using audio device: {}", default_out_dev.name()?);
     tokio::spawn(async move {
         open_window_connect_audio(
             "Live Audio Lowpass Filter View",
@@ -198,40 +174,87 @@ async fn run_vibration_logic(settings: Arc<Mutex<AppSettings>>) -> Result<()> {
             "time (seconds)",
             "Amplitude (with Lowpass filter)",
             AudioDevAndCfg::new(Some(default_out_dev), Some(default_out_config)),
-            // --- FIX: Pass the standalone function pointer here ---
             TransformFn::Basic(audio_transform_fn),
         );
     });
 
-    loop {
-        let mut collected_values: Vec<f64> = Vec::with_capacity(SAMPLE_LIMIT);
-        if rx.recv_many(&mut collected_values, SAMPLE_LIMIT).await == 0 {
-            println!("Audio stream closed. Exiting vibration loop.");
-            break;
+    'reconnection_loop: loop {
+        println!("[Buttplug] Attempting to connect to server at ws://localhost:12345...");
+
+        let client = ButtplugClient::new("subwoofer");
+        let connector = new_json_ws_client_connector("ws://localhost:12345/buttplug");
+        
+        if let Err(e) = client.connect(connector).await {
+            eprintln!("[Buttplug] Connection failed: {}. Retrying in 5 seconds...", e);
+            time::sleep(Duration::from_secs(5)).await;
+            continue 'reconnection_loop;
         }
 
-        let collected_length = collected_values.len();
-        let mean_value: f64 = if collected_length > 0 {
-            collected_values.iter().sum::<f64>() / collected_length as f64
-        } else {
-            0.0
+        println!("[Buttplug] Connected! Scanning for devices...");
+
+        if let Err(e) = client.start_scanning().await {
+            eprintln!("[Buttplug] Failed to start scanning: {}. Retrying...", e);
+            let _ = client.disconnect().await;
+            time::sleep(Duration::from_secs(5)).await;
+            continue 'reconnection_loop;
+        }
+        
+        time::sleep(Duration::from_secs(2)).await;
+        
+        if let Err(e) = client.stop_scanning().await {
+             eprintln!("[Buttplug] Failed to stop scanning: {}. Retrying...", e);
+            let _ = client.disconnect().await;
+            time::sleep(Duration::from_secs(5)).await;
+            continue 'reconnection_loop;
+        }
+
+        let all_devices = client.devices();
+        let Some(client_device) = all_devices.first() else {
+            eprintln!("[Buttplug] No device found. Please ensure a device is connected and rescan in Intiface. Retrying in 10 seconds...");
+            let _ = client.disconnect().await;
+            time::sleep(Duration::from_secs(10)).await;
+            continue 'reconnection_loop;
         };
 
-        let computed_intensity = f64::min(mean_value, 1.0);
+        println!("[Buttplug] Device connected: {}", client_device.name());
+        println!("[Vibration] Starting vibration loop...");
 
-        if let Err(e) = client_device.vibrate(&ScalarValueCommand::ScalarValue(computed_intensity)).await {
-            eprintln!("Failed to send vibrate command: {}. Disconnecting.", e);
-            break;
+        // Inner operational loop
+        loop {
+            let mut collected_values: Vec<f64> = Vec::with_capacity(SAMPLE_LIMIT);
+            if rx.recv_many(&mut collected_values, SAMPLE_LIMIT).await == 0 {
+                println!("[Audio] Audio stream closed. Shutting down.");
+                client.disconnect().await?;
+                return Ok(());
+            }
+
+            let collected_length = collected_values.len();
+            let mean_value: f64 = if collected_length > 0 {
+                collected_values.iter().sum::<f64>() / collected_length as f64
+            } else {
+                0.0
+            };
+
+            let computed_intensity = f64::min(mean_value, 1.0);
+
+            if let Err(e) = client_device.vibrate(&ScalarValueCommand::ScalarValue(computed_intensity)).await {
+                eprintln!("[Buttplug] Vibrate command failed: {}. Connection lost.", e);
+                break;
+            }
+
+            let delay = { settings.lock().unwrap().delay_ms };
+            time::sleep(Duration::from_millis(delay)).await;
         }
 
-        let delay = { settings.lock().unwrap().delay_ms };
-        time::sleep(Duration::from_millis(delay)).await;
+        // We landed here because the inner loop broke (connection lost).
+        // Before we loop around to reconnect, we make a best-effort attempt
+        // to tell the server we are done with the old session. This helps
+        // the server release the device so our new session can claim it.
+        println!("[Buttplug] Cleaning up old session before reconnecting...");
+        let _ = client.disconnect().await;
+
+        println!("[Buttplug] Disconnected. Will attempt to reconnect...");
     }
-
-    println!("Disconnecting from Buttplug server.");
-    client.disconnect().await?;
-
-    Ok(())
 }
 
 
