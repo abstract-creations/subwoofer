@@ -1,21 +1,23 @@
-use audio_visualizer::dynamic::live_input::AudioDevAndCfg;
-use audio_visualizer::dynamic::window_top_btm::{open_window_connect_audio, TransformFn};
+use audio_visualizer::dynamic::{
+    live_input::AudioDevAndCfg,
+    window_top_btm::{TransformFn, open_window_connect_audio},
+};
 
 use buttplug::{
-    client::{ButtplugClient, ScalarValueCommand},
-    core::connector::new_json_ws_client_connector,
+    ButtplugClient, ButtplugWebsocketClientTransport, connector::ButtplugRemoteClientConnector,
+    device::ClientDeviceOutputCommand, serializer::ButtplugClientJSONSerializer,
 };
 use core::panic;
 use cpal::{
-    traits::{DeviceTrait, HostTrait},
     Device,
+    traits::{DeviceTrait, HostTrait},
 };
 use lowpass_filter::lowpass_filter;
-use std::io::{stdin, BufRead};
+use std::io::{BufRead, stdin};
 use std::sync::OnceLock;
 use std::time::Duration;
-use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::mpsc::Sender;
+use tokio::sync::mpsc::error::TrySendError;
 use tokio::{sync::mpsc, time};
 
 /// For now, a maximum of 16 persisted samples at any given run is good enough to average.
@@ -28,7 +30,12 @@ static GLOBAL_TX: OnceLock<Sender<f64>> = OnceLock::new();
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let connector = new_json_ws_client_connector("ws://localhost:12345/buttplug");
+    let connector = ButtplugRemoteClientConnector::<
+        ButtplugWebsocketClientTransport,
+        ButtplugClientJSONSerializer,
+    >::new(ButtplugWebsocketClientTransport::new_insecure_connector(
+        "ws://127.0.0.1:12345",
+    ));
     let client = ButtplugClient::new("subwoofer");
 
     // TODO(spotlightishere): Properly handle errors if scanning fails
@@ -41,7 +48,7 @@ async fn main() -> anyhow::Result<()> {
     // This should be refactored in the future to support multiple,
     // similar to how we support multiple audio devices.
     let all_devices = client.devices();
-    let Some(client_device) = all_devices.first() else {
+    let Some((_, client_device)) = all_devices.first_key_value() else {
         panic!("Unable to obtain the first client device!");
     };
 
@@ -123,7 +130,9 @@ async fn main() -> anyhow::Result<()> {
         // Play!
         // println!("Playing {}", computed_intensity);
         let _ = client_device
-            .vibrate(&ScalarValueCommand::ScalarValue(computed_intensity))
+            .run_output(&ClientDeviceOutputCommand::Vibrate(
+                computed_intensity.into(),
+            ))
             .await;
 
         interval.tick().await;
@@ -137,13 +146,15 @@ async fn main() -> anyhow::Result<()> {
 /// Helps to select available output devices.
 pub fn list_output_devs() -> Vec<(String, cpal::Device)> {
     let host = cpal::default_host();
-    type DeviceName = String;
-    let mut devs: Vec<(DeviceName, Device)> = host
+    let mut devs: Vec<(String, Device)> = host
         .output_devices()
         .unwrap()
         .map(|dev| {
             (
-                dev.name().unwrap_or_else(|_| String::from("<unknown>")),
+                match dev.name() {
+                    Ok(name) => name,
+                    Err(_) => "<unknown>".to_string(),
+                },
                 dev,
             )
         })

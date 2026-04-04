@@ -1,14 +1,14 @@
 [package]
 name = "subwoofer"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
 [dependencies]
 anyhow = "1.0"
-audio-visualizer = "0.4"
-buttplug = "9.0"
-clap = { version = "4.5", features = ["derive"] }
+audio-visualizer = "0.5"
+buttplug = "10.0"
+clap = { version = "4.6", features = ["derive"] }
 cpal = "0.15"
-lowpass-filter = "0.3"
-spectrum-analyzer = "1.5"
-tokio = { version = "1.39", features = ["full"] }
+lowpass-filter = "0.4"
+spectrum-analyzer = "1.7"
+tokio = { version = "1.51", features = ["full"] }
